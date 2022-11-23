@@ -6,6 +6,27 @@
 #include <Adafruit_SSD1306.h>
 #include <LiquidCrystal.h>
 #include <dht.h>
+#include <MFRC522.h>
+
+/*
+  Fjern sound sensor
+*/
+
+//RFID - Card scanner
+#define RST_PIN A3
+#define SS_PIN 53
+MFRC522 RFID(SS_PIN, RST_PIN);
+
+//LCD Displays
+String WrongID = "    WRONG ID";
+String CorrectID = "   CORRECT ID";
+String ReadyToScan = "   SKAN KORT";
+#define CORRECT_ID "615486115"
+
+bool LoggedIn = false;
+
+// Water level sensor
+#define WATER_PIN A10
 
 // Temp & Humidity sensor
 #define DHT_PIN 8
@@ -59,6 +80,8 @@ unsigned long prevMillis05 = 0;
 unsigned long prevMillisSW = 0;
 unsigned long prevMillisDistance = 0;
 unsigned long prevMillisTemp = 0;
+unsigned long ScanMillis = 0;
+
 
 //BTN for Exit
 #define BTNEXIT_PIN 3
@@ -67,6 +90,7 @@ int btnState = 0;
 void setup()
 {
   Serial.begin(9600);
+  SPI.begin();
   pinMode(JOYSTICKY_PIN, INPUT);
   pinMode(JOYSTICKSW_PIN, INPUT_PULLUP);
 
@@ -89,79 +113,131 @@ void setup()
   lcd.begin(16, 2);
   lcd.clear();
 
+
+  
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
   { // Address for 128x64
     Serial.println(F("SSD1306 allocation failed"));
     for (;;); // Don't proceed, loop forever
   }
+
+  RFID.PCD_Init();
+  RFID.PCD_DumpVersionToSerial();
+  
 }
 unsigned long  tempMills = 0;
 void loop()
 {
   //yPosition = analogRead(JOYSTICKY_PIN); //map(analogRead(JOYSTICKY_PIN), 0, 1023, 0, 7)
-  yPosition = map(analogRead(JOYSTICKY_PIN), 0, 1023, 0, 7);
-  swState = digitalRead(JOYSTICKSW_PIN);
-  btnState = digitalRead(BTNEXIT_PIN);
+
   
   display.clearDisplay();
-  display.setTextSize(1); // Normal 1:1 pixel scale
   display.setTextColor(WHITE); // Draw white text
-  display.setCursor(0, 0); // Start at top-left corner
-  display.println(F("Start distance reader"));
-  display.setCursor(0, 12); // Start at top-left corner
-  display.println(F("Start Sound detector"));
-  display.setCursor(0, 24); // Start at top-left corner
-  display.println(F("Start water detector"));
-  display.setCursor(0, 36); // Start at top-left corner
-  display.println(F("Start temperatur"));
-
-  if (millis() - prevMillis05 >= 125 && swState && itemSelected == 0) {
-    prevMillis05 = millis();
-    if (yPosition > 3 || yPosition < 3) {
-      if (yPosition > 3 && (selectedItem + 12 <= 44)) {
-        selectedItem += 12;
-      }
-      else if (yPosition < 3 && (selectedItem - 12 >= 8)) {
-        selectedItem -= 12;
+  if (LoggedIn) {
+    yPosition = map(analogRead(JOYSTICKY_PIN), 0, 1023, 0, 7);
+    swState = digitalRead(JOYSTICKSW_PIN);
+    btnState = digitalRead(BTNEXIT_PIN);
+    
+    display.setTextSize(1); // Normal 1:1 pixel scale
+    display.setCursor(0, 0); // Start at top-left corner
+    display.println(F("Start distance reader"));
+    display.setCursor(0, 12); // Start at top-left corner
+    display.println(F("Start Sound detector"));
+    display.setCursor(0, 24); // Start at top-left corner
+    display.println(F("Start water detector"));
+    display.setCursor(0, 36); // Start at top-left corner
+    display.println(F("Start temperatur"));
+    display.setCursor(0, 48); // Start at top-left corner
+    display.println(F("Logout"));
+    
+    if (millis() - prevMillis05 >= 125 && swState && itemSelected == 0) {
+      prevMillis05 = millis();
+      if (yPosition > 3 || yPosition < 3) {
+        if (yPosition > 3 && (selectedItem + 12 <= 56)) {
+          selectedItem += 12;
+        }
+        else if (yPosition < 3 && (selectedItem - 12 >= 8)) {
+          selectedItem -= 12;
+        }
       }
     }
-  }
-  CreateUnderLine(selectedItem);
-  if (! swState && millis() - prevMillisSW >= 500 && itemSelected == 0) {
-    prevMillisSW = millis();
-    itemSelected = selectedItem;
-  }
-  if (itemSelected != 0) {
-
-    switch (selectedItem) {
-      case 8: //for distance reader
-        if (millis() - prevMillisDistance >= 500) {
-          prevMillisDistance = millis();
-          StartDistanceReader();
-        }
-        break;
-      case 20: //for Sound detector
-        if (millis() - prevMillisDistance >= 25) {
-          prevMillisDistance = millis();
-          StartSoundReader();
-        }
-        break;
-      case 32: //for Water detector
-        digitalWrite(TRIG_PIN, HIGH);
-        StartWaterReader();
-        break;
-      case 44: //for Temp
-      if (millis() - prevMillisTemp >= 2000) {
-        prevMillisTemp = millis();
-        StartTempReader();
-      }
-        break;
-      default:
-        break;
+    CreateUnderLine(selectedItem);
+    if (! swState && millis() - prevMillisSW >= 500 && itemSelected == 0) {
+      prevMillisSW = millis();
+      itemSelected = selectedItem;
     }
+    if (itemSelected != 0) {
+      switch (selectedItem) {
+        case 8: //for distance reader
+          if (millis() - prevMillisDistance >= 500) {
+            prevMillisDistance = millis();
+            StartDistanceReader();
+          }
+          break;
+        case 20: //for Sound detector
+          if (millis() - prevMillisDistance >= 25) {
+            prevMillisDistance = millis();
+            StartSoundReader();
+          }
+          break;
+        case 32: //for Water detector
+          if (millis() - prevMillisDistance >= 150) {
+            prevMillisDistance = millis();
+            StartWaterReader();
+          }
+          break;
+        case 44: //for Temp
+          if (millis() - prevMillisTemp >= 2000) {
+            prevMillisTemp = millis();
+            StartTempReader();
+          }
+          break;
+        case 56: //for Logout
+          LoggedIn = false;
+          itemSelected = 0;
+          selectedItem = 8;
+          Serial.println("Logging out");
+          break;
+        default:
+          break;
+      }
+    }
+    display.display();
+    return;
   }
+  lcd.clear();
+  lcd.print(ReadyToScan);
+  
+  display.clearDisplay();
+  display.setTextSize(1.5); // Normal 1:1 pixel scale
+  display.setCursor(32,32); // Start at top-left corner
+  display.println(F("Wating..."));
   display.display();
+  
+  if ( ! RFID.PICC_ReadCardSerial() && ! RFID.PICC_IsNewCardPresent()) {
+    return;
+  }
+  if (millis() - ScanMillis >= 1000 && LoggedIn == 0){
+    ScanMillis = millis();
+    if (RFID.PICC_ReadCardSerial()) {
+      Serial.println("Scanning");
+      String id = "";
+      for (byte i = 0; i < RFID.uid.size; i++) {
+        id.concat(String(RFID.uid.uidByte[i], DEC));
+      }
+      Serial.print(id);
+      Serial.print(" | ");
+      Serial.println(CORRECT_ID);
+      lcd.clear();
+      if (id == CORRECT_ID) {
+        LoggedIn = true;
+        lcd.print(CorrectID);
+        return;
+      }
+      lcd.print(WrongID);
+    }
+  }
 }
 
 //CreateUnderLine(0, 8, 100); // Starts on 8 goes up 12 for every "text"
@@ -220,9 +296,11 @@ void StartSoundReader() {
 }
 
 void StartWaterReader() {
+  int sensorValue = analogRead(WATER_PIN);
+  lcd.clear();
   lcd.print("Water: ");
-  Serial.println(itemSelected);
-
+  lcd.print(sensorValue);
+  Serial.println(sensorValue);
 }
 
 void StartTempReader() {
@@ -235,5 +313,4 @@ void StartTempReader() {
   lcd.print("Humidity: ");
   lcd.print(DHT.humidity);
   lcd.print("%");
-
 }

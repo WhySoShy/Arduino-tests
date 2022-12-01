@@ -1,17 +1,38 @@
 /* Simpel demo af OLED LCD Display med I2C */
 #include <Arduino.h>
-#include <SPI.h>
-#include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <LiquidCrystal.h>
 #include <dht.h>
-#include <MFRC522.h>
+//#include <uRTCLib.h>
 #include <DS3231.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <MFRC522.h>
+#include <LiquidCrystal.h>
+
 
 // Clock
 DS3231 rtc;
-DateTime date;
+
+//RGB LED
+#define RGBRED_PIN 5
+#define RGBGREEN_PIN 6
+#define RGBBLUE_PIN 7
+
+#define POTENTIORED_PIN A13
+#define POTENTIOGREEN_PIN A14
+#define POTENTIOBLUE_PIN A15
+
+int PotentioRed_Value = 0;
+int PotentioGreen_Value = 0;
+int PotentioBlue_Value = 0;
+int calc = 0;
+
+
+
+//LED Light
+#define GREEN_PIN 11
+#define RED_PIN 12
 
 //RFID - Card scanner
 #define RST_PIN A3
@@ -59,7 +80,6 @@ int distance = 0;
 #define JOYSTICKY_PIN A1 //Pin of Y Pos of joystick
 #define JOYSTICKSW_PIN 40 //Pin of Switch/Button of joystick
 
-//If Y Pos is minus it is down, if its in plus its up
 int yPosition = 0;
 int swState = 0;
 
@@ -82,14 +102,18 @@ unsigned long prevMillisSW = 0;
 unsigned long prevMillisDistance = 0;
 unsigned long prevMillisTemp = 0;
 unsigned long ScanMillis = 0;
+unsigned long whatsTheTimeMillis = 0;
+unsigned long waitingMillis = 0;
+unsigned long ExitJoytstickMillis = 0;
 
+// Design patterns for DOT MATRIX
 
 //BTN for Exit
 #define BTNEXIT_PIN 3
 int btnState = 0;
 
 /*  TEST    */
-String test[] = {"Distance Reader","water detector","tempature"};
+String test[] = {"Distance Reader", "water detector", "tempature"};
 
 
 void setup()
@@ -97,18 +121,35 @@ void setup()
   Serial.begin(9600);
   SPI.begin();
   Wire.begin();
-  //Clock
-  Serial.println(test[0].length());
+
+  //LED
+  pinMode(GREEN_PIN,OUTPUT);
+  pinMode(RED_PIN,OUTPUT);
+
+  //RGB LED
+  pinMode(RGBRED_PIN, OUTPUT);
+  pinMode(RGBGREEN_PIN, OUTPUT);
+  pinMode(RGBBLUE_PIN, OUTPUT);
   
+  RFID.PCD_Init();
+  RFID.PCD_DumpVersionToSerial();
+  //Clock
+  //Set timestamp of the module **SHOULD ONLY BE RUNNED ONCE**
+  /*
+    rtc.setHour(10);
+    rtc.setMinute(54);
+    rtc.setSecond(0);
+    rtc.setDoW(2);
+    rtc.setDate(29);
+    rtc.setMonth(11);
+    rtc.setYear(22);
+
+    rtc.setClockMode(false); //FALSE FOR 24H - TRUE FOR 12H
+  */
+
   pinMode(JOYSTICKY_PIN, INPUT);
   pinMode(JOYSTICKSW_PIN, INPUT_PULLUP);
-
-  /*LED'S FOR TESTS*/
-  pinMode(4, OUTPUT); //GREEN LED - DISTANCE
-  pinMode(5, OUTPUT); //WHITE LED - SOUND
-  pinMode(6, OUTPUT); //RED LED - WATER
-  pinMode(7, OUTPUT); //BLUE LED - TEMP
-
+  
   //Ultrasonic sensor
   pinMode(ECHO_PIN, INPUT);
   pinMode(TRIG_PIN, OUTPUT);
@@ -120,7 +161,7 @@ void setup()
   lcd.clear();
 
 
-  
+
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
   { // Address for 128x64
@@ -128,21 +169,43 @@ void setup()
     for (;;); // Don't proceed, loop forever
   }
 
-  RFID.PCD_Init();
-  RFID.PCD_DumpVersionToSerial();
-  
+
 }
 unsigned long  tempMills = 0;
+bool h24;
+bool utc;
+bool Century=false;
+int waitingIndex = 1;
+bool InMode = false;
+
 void loop()
 {
-  //yPosition = analogRead(JOYSTICKY_PIN); //map(analogRead(JOYSTICKY_PIN), 0, 1023, 0, 7)
+  //Display clock
+  displayTime(64,50,1);
+
+  // Divide by 4 beacuse the max value of Potentionmeter is 1023
+  PotentioRed_Value = analogRead(POTENTIORED_PIN);
+  PotentioGreen_Value = analogRead(POTENTIOGREEN_PIN);
+  PotentioBlue_Value = analogRead(POTENTIOBLUE_PIN);
+
+
+
+  calc = PotentioRed_Value / 4;
+  analogWrite(RGBRED_PIN, calc);
+  calc = PotentioGreen_Value / 4;
+  analogWrite(RGBGREEN_PIN, calc);
+  calc = PotentioBlue_Value / 4;
+  analogWrite(RGBBLUE_PIN, calc);
+
+  
   
   if (LoggedIn) {
     yPosition = map(analogRead(JOYSTICKY_PIN), 0, 1023, 0, 7);
     swState = digitalRead(JOYSTICKSW_PIN);
     btnState = digitalRead(BTNEXIT_PIN);
-    
-    display.clearDisplay();
+
+
+
     display.setTextColor(WHITE); // Draw white text
     display.setTextSize(1); // Normal 1:1 pixel scale
     display.setCursor(0, 0); // Start at top-left corner
@@ -150,9 +213,10 @@ void loop()
     display.setCursor(0, 12); // Start at top-left corner
     display.println(F("Start water detector"));
     display.setCursor(0, 24); // Start at top-left corner
-    display.println(F("Start temperatur"));
+    display.println(F("Start temperature"));
     display.setCursor(0, 36); // Start at top-left corner
     display.println(F("Logout"));
+
     
     if (millis() - prevMillis05 >= 125 && swState && itemSelected == 0) {
       prevMillis05 = millis();
@@ -205,18 +269,27 @@ void loop()
   }
   lcd.clear();
   lcd.print(ReadyToScan);
-  
-  display.clearDisplay();
+
+  displayTime(40,32,1.5);
   display.setTextColor(WHITE); // Draw white text
-  display.setTextSize(1.5); // Normal 1:1 pixel scale
-  display.setCursor(32,32); // Start at top-left corner
-  display.println(F("Wating..."));
+  display.setCursor(38, 50); // Start at top-left corner
+  display.print("Wating");
+    
+  for(int i = 0; i < waitingIndex; i++) 
+    display.print(".");
+  if (millis() - waitingMillis >= 750) {
+    waitingMillis = millis();
+    waitingIndex++;
+    if (waitingIndex > 3) 
+      waitingIndex = 1;
+  }
+    
   display.display();
-  
+
   if ( ! RFID.PICC_ReadCardSerial() && ! RFID.PICC_IsNewCardPresent()) {
     return;
   }
-  if (millis() - ScanMillis >= 1000 && LoggedIn == 0){
+  if (millis() - ScanMillis >= 1000 && LoggedIn == 0) {
     ScanMillis = millis();
     if (RFID.PICC_ReadCardSerial()) {
       String id = "";
@@ -231,12 +304,16 @@ void loop()
         LoggedIn = true;
         lcd.print(CorrectID);
         Serial.println("Correct");
+        digitalWrite(GREEN_PIN, HIGH);
         delay(1000);
+        digitalWrite(GREEN_PIN, LOW);
         return;
       }
       Serial.println("Wrong");
       lcd.print(WrongID);
-      delay(2500);
+      digitalWrite(RED_PIN, HIGH);
+      delay(1500);
+      digitalWrite(RED_PIN, LOW);
     }
   }
 }
@@ -246,7 +323,33 @@ void CreateUnderLine(int y) { //38 Logout
   display.drawFastHLine(0, y, (selectedItem < 32 ? 120 : (selectedItem == 32 ? 94 : 38)), WHITE);
 }
 
+void displayTime(byte x, byte y, byte size) {
+  byte time;
+  display.clearDisplay();
+  display.setTextSize(size);
+  display.setCursor(x, y); // 64,50
+  //Set hour
+  time = rtc.getHour(h24, utc);
+  if (time <= 9) 
+    display.print('0');
+  display.print(time);
+  display.print(":");
+  //Set minute
+  time = rtc.getMinute();
+  if (time <= 9) 
+    display.print('0');
+  display.print(time);
+  //Set seconds
+  time = rtc.getSecond();
+  display.print(":");
+  if (time <= 9) 
+    display.print('0');
+  display.println(time);
+}
+
+
 void ExitSelectedItem() {
+  Serial.println(selectedItem);
   if (itemSelected != 0 && millis() - tempMills >= 500 && btnState) {
     tempMills = millis();
     switch (selectedItem) {
@@ -282,20 +385,6 @@ void StartDistanceReader() {
   lcd.print("cm");
 }
 
-void StartSoundReader() {
-  soundSensorValue = analogRead(AO_PIN);
-  if (maxSoundValue < soundSensorValue) {
-    maxSoundValue = soundSensorValue;
-  }
-  lcd.clear();
-  lcd.print("Sound DBs: ");
-  lcd.print(soundSensorValue);
-  lcd.setCursor(0, 1);
-  lcd.print("Max DBs: ");
-  lcd.print(maxSoundValue);
-
-}
-
 void StartWaterReader() {
   int sensorValue = analogRead(WATER_PIN);
   lcd.clear();
@@ -310,7 +399,7 @@ void StartTempReader() {
   lcd.print("Tempature: ");
   lcd.print(DHT.temperature);
   lcd.print("C");
-  lcd.setCursor(0,1);
+  lcd.setCursor(0, 1);
   lcd.print("Humidity: ");
   lcd.print(DHT.humidity);
   lcd.print("%");
